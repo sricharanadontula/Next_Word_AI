@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>NextWord AI</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+</head>
+
+<body>
+
+    <div class="page">
+
+        <!-- Header -->
+
+        <header class="header">
+
+            <div class="logo">
+                <div class="logo-icon">N</div>
+
+                <div>
+                    <h1>NextWord AI</h1>
+                    <p>LSTM Text Generation</p>
+                </div>
+            </div>
+
+            <div class="model-badge">
+                ● Combined Corpus Model
+            </div>
+
+        </header>
+
+
+        <!-- Hero -->
+
+        <section class="hero">
+
+            <div class="hero-badge">
+                NLP • LSTM • Text Generation
+            </div>
+
+            <h2>
+                Continue your thoughts
+                <span>with AI</span>
+            </h2>
+
+            <p>
+                Enter a sentence or phrase and let our LSTM language
+                model predict what comes next.
+            </p>
+
+        </section>
+
+
+        <!-- Main Card -->
+
+        <main class="generator-card">
+
+            <form method="POST" id="generatorForm">
+
+                <div class="section-header">
+
+                    <div>
+                        <h3>Your text</h3>
+                        <p>Start with a phrase and let the model continue it.</p>
+                    </div>
+
+                    <span id="charCount">0 characters</span>
+
+                </div>
+
+
+                <textarea
+                    id="textInput"
+                    name="text"
+                    placeholder="Example: To be or..."
+                    required
+                >{{ input_text }}</textarea>
+
+
+                <!-- Examples -->
+
+                <div class="examples">
+
+                    <span>Try an example:</span>
+
+                    <button
+                        type="button"
+                        onclick="setExample('To be or')"
+                    >
+                        To be or
+                    </button>
+
+                    <button
+                        type="button"
+                        onclick="setExample('The world is')"
+                    >
+                        The world is
+                    </button>
+
+                    <button
+                        type="button"
+                        onclick="setExample('She was very')"
+                    >
+                        She was very
+                    </button>
+
+                </div>
+
+
+                <!-- Controls -->
+
+                <div class="controls">
+
+                    <div class="control">
+
+                        <label for="numberOfWords">
+                            Words to generate
+                        </label>
+
+                        <input
+                            type="number"
+                            id="numberOfWords"
+                            name="number_of_words"
+                            min="1"
+                            max="50"
+                            value="{{ number_of_words }}"
+                        >
+
+                    </div>
+
+
+                    <div class="control">
+
+                        <label for="temperature">
+                            Creativity
+                        </label>
+
+                        <div class="temperature-row">
+
+                            <input
+                                type="range"
+                                id="temperature"
+                                name="temperature"
+                                min="0.3"
+                                max="1.2"
+                                step="0.1"
+                                value="{{ temperature }}"
+                            >
+
+                            <span id="temperatureValue">
+                                {{ temperature }}
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    type="submit"
+                    class="generate-button"
+                    id="generateButton"
+                >
+
+                    <span id="buttonText">
+                        Generate Text
+                    </span>
+
+                    <span class="arrow">→</span>
+
+                </button>
+
+            </form>
+
+
+            {% if generated_text %}
+
+            <!-- Result -->
+
+            <section class="result">
+
+                <div class="result-header">
+
+                    <div>
+                        <span class="result-label">
+                            GENERATED TEXT
+                        </span>
+
+                        <h3>Model Output</h3>
+                    </div>
+
+                    <button
+                        type="button"
+                        class="copy-button"
+                        onclick="copyText()"
+                    >
+                        Copy
+                    </button>
+
+                </div>
+
+
+                <div
+                    class="generated-text"
+                    id="generatedText"
+                >
+                    {{ generated_text }}
+                </div>
+
+            </section>
+
+            {% endif %}
+
+        </main>
+
+
+        <!-- Information -->
+
+        <section class="info-section">
+
+            <div class="info-card">
+
+                <div class="info-icon">🧠</div>
+
+                <h3>LSTM Model</h3>
+
+                <p>
+                    Uses a Long Short-Term Memory neural network
+                    for next-word prediction.
+                </p>
+
+            </div>
+
+
+            <div class="info-card">
+
+                <div class="info-icon">📚</div>
+
+                <h3>Diverse Corpus</h3>
+
+                <p>
+                    Trained using Shakespeare, Jane Austen
+                    and Wikipedia text.
+                </p>
+
+            </div>
+
+
+            <div class="info-card">
+
+                <div class="info-icon">✨</div>
+
+                <h3>Smart Sampling</h3>
+
+                <p>
+                    Temperature and top-k sampling provide
+                    more varied text generation.
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <footer>
+
+            <p>
+                NextWord AI • LSTM NLP Project
+            </p>
+
+        </footer>
+
+    </div>
+
+
+    <script>
+
+        const textInput =
+            document.getElementById("textInput");
+
+        const charCount =
+            document.getElementById("charCount");
+
+        const temperature =
+            document.getElementById("temperature");
+
+        const temperatureValue =
+            document.getElementById("temperatureValue");
+
+
+        function updateCharCount() {
+
+            charCount.textContent =
+                textInput.value.length +
+                " characters";
+
+        }
+
+
+        textInput.addEventListener(
+            "input",
+            updateCharCount
+        );
+
+
+        function setExample(text) {
+
+            textInput.value = text;
+
+            updateCharCount();
+
+            textInput.focus();
+
+        }
+
+
+        temperature.addEventListener(
+            "input",
+            function() {
+
+                temperatureValue.textContent =
+                    temperature.value;
+
+            }
+        );
+
+
+        function copyText() {
+
+            const text =
+                document.getElementById(
+                    "generatedText"
+                ).innerText;
+
+            navigator.clipboard.writeText(text);
+
+        }
+
+
+        document
+            .getElementById("generatorForm")
+            .addEventListener(
+                "submit",
+                function() {
+
+                    document.getElementById(
+                        "buttonText"
+                    ).textContent = "Generating...";
+
+                }
+            );
+
+
+        updateCharCount();
+
+    </script>
+
+</body>
+
+</html>
