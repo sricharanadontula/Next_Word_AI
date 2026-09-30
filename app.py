@@ -1,8 +1,15 @@
 import os
 
+# ============================================================
+# RENDER / TENSORFLOW SETTINGS
+# ============================================================
+
 # Force TensorFlow to use CPU on Render
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+# Reduce unnecessary TensorFlow logs
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 
 from flask import Flask, render_template, request
 import numpy as np
@@ -16,10 +23,17 @@ app = Flask(__name__)
 
 
 # ============================================================
-# LOAD MODEL AND TOKENIZER
+# MODEL SETTINGS
 # ============================================================
 
-print("Loading model...", flush=True)
+SEQUENCE_LENGTH = 20
+
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
+
+print("Loading trained model...", flush=True)
 
 model = load_model(
     "models/next_word_model.keras",
@@ -28,6 +42,20 @@ model = load_model(
 
 print("Model loaded successfully.", flush=True)
 
+print(
+    f"Model input shape: {model.input_shape}",
+    flush=True
+)
+
+print(
+    f"Model output shape: {model.output_shape}",
+    flush=True
+)
+
+
+# ============================================================
+# LOAD TOKENIZER
+# ============================================================
 
 print("Loading tokenizer...", flush=True)
 
@@ -47,52 +75,78 @@ index_to_word = {
 }
 
 
-# ============================================================
-# MODEL SETTINGS
-# ============================================================
-
-SEQUENCE_LENGTH = 20
+print(
+    f"Tokenizer vocabulary size: {len(tokenizer.word_index)}",
+    flush=True
+)
 
 
 # ============================================================
 # SAMPLE NEXT WORD
 # ============================================================
 
-def sample_next_word(probabilities, temperature=0.8, top_k=10):
+def sample_next_word(
+    probabilities,
+    temperature=0.8,
+    top_k=10
+):
 
-    probabilities = np.asarray(probabilities).astype("float64")
+    probabilities = np.asarray(
+        probabilities
+    ).astype("float64")
 
-    # Prevent invalid values
-    probabilities = np.nan_to_num(probabilities)
+    # Remove invalid values
+    probabilities = np.nan_to_num(
+        probabilities,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
 
-    # Make sure top_k is not larger than vocabulary size
-    top_k = min(top_k, len(probabilities))
+    # Make sure top_k is valid
+    top_k = min(
+        top_k,
+        len(probabilities)
+    )
 
     # Get top-k word indices
-    top_indices = np.argsort(probabilities)[-top_k:]
+    top_indices = np.argsort(
+        probabilities
+    )[-top_k:]
 
-    top_probabilities = probabilities[top_indices]
+    top_probabilities = probabilities[
+        top_indices
+    ]
 
     # Apply temperature
     top_probabilities = np.log(
         top_probabilities + 1e-10
     ) / temperature
 
-    top_probabilities = np.exp(top_probabilities)
+    top_probabilities = np.exp(
+        top_probabilities
+    )
 
     # Normalize probabilities
-    probability_sum = np.sum(top_probabilities)
+    probability_sum = np.sum(
+        top_probabilities
+    )
 
-    if probability_sum == 0:
-        top_probabilities = np.ones_like(top_probabilities) / len(
-            top_probabilities
-        )
-    else:
+    if probability_sum <= 0:
+
         top_probabilities = (
-            top_probabilities / probability_sum
+            np.ones_like(top_probabilities)
+            / len(top_probabilities)
         )
 
-    # Randomly select a word
+    else:
+
+        top_probabilities = (
+            top_probabilities
+            / probability_sum
+        )
+
+    # Select a word
     selected_index = np.random.choice(
         top_indices,
         p=top_probabilities
@@ -113,50 +167,95 @@ def generate_text(
 ):
 
     print(
-        f"Starting generation: '{seed_text}' | "
+        f"Starting generation: "
+        f"'{seed_text}' | "
         f"words={number_of_words}",
         flush=True
     )
 
     generated_text = seed_text
 
-    # Convert initial text to tokens only once
+    # Convert seed text into tokens
     token_list = tokenizer.texts_to_sequences(
         [seed_text]
     )[0]
 
-    for i in range(number_of_words):
+    print(
+        f"Initial token list: {token_list}",
+        flush=True
+    )
+
+    # If no known words were found
+    if not token_list:
 
         print(
-            f"Predicting word {i + 1}/{number_of_words}",
+            "No known words found in tokenizer.",
             flush=True
         )
 
-        # Keep only the last SEQUENCE_LENGTH tokens
-        current_tokens = token_list[-SEQUENCE_LENGTH:]
+        return seed_text
 
-        # Pad sequence
+    for i in range(number_of_words):
+
+        print(
+            f"Predicting word "
+            f"{i + 1}/{number_of_words}",
+            flush=True
+        )
+
+        # Keep only the last 20 tokens
+        current_tokens = token_list[
+            -SEQUENCE_LENGTH:
+        ]
+
+        # Convert to shape (1, 20)
         padded_tokens = pad_sequences(
             [current_tokens],
             maxlen=SEQUENCE_LENGTH,
             padding="pre"
         )
 
-        # Direct model inference
-        # This is faster than model.predict() for a single sample
-        probabilities = model(
-            padded_tokens,
-            training=False
-        ).numpy()[0]
+        print(
+            f"Input shape: "
+            f"{padded_tokens.shape}",
+            flush=True
+        )
 
-        # Select next word
+        # ====================================================
+        # MODEL PREDICTION
+        # ====================================================
+
+        try:
+
+            probabilities = model.predict(
+                padded_tokens,
+                verbose=0
+            )[0]
+
+        except Exception as error:
+
+            print(
+                f"Prediction error: {error}",
+                flush=True
+            )
+
+            raise error
+
+        print(
+            "Prediction completed.",
+            flush=True
+        )
+
+        # ====================================================
+        # SELECT NEXT WORD
+        # ====================================================
+
         predicted_word_index = sample_next_word(
             probabilities,
             temperature=temperature,
             top_k=top_k
         )
 
-        # Convert index to word
         next_word = index_to_word.get(
             predicted_word_index,
             ""
@@ -165,7 +264,8 @@ def generate_text(
         if not next_word:
 
             print(
-                "No next word found.",
+                f"No word found for index "
+                f"{predicted_word_index}",
                 flush=True
             )
 
@@ -174,16 +274,19 @@ def generate_text(
         # Add generated word
         generated_text += " " + next_word
 
-        # Add predicted token for next iteration
-        token_list.append(predicted_word_index)
+        # Add token for next prediction
+        token_list.append(
+            predicted_word_index
+        )
 
         print(
-            f"Generated: {next_word}",
+            f"Generated word: {next_word}",
             flush=True
         )
 
     print(
-        "Generation completed.",
+        f"Generation completed: "
+        f"{generated_text}",
         flush=True
     )
 
@@ -194,7 +297,10 @@ def generate_text(
 # HOME ROUTE
 # ============================================================
 
-@app.route("/", methods=["GET", "POST"])
+@app.route(
+    "/",
+    methods=["GET", "POST"]
+)
 def home():
 
     generated_text = ""
@@ -211,33 +317,76 @@ def home():
             ""
         ).strip()
 
+        # ----------------------------------------------------
+        # Number of words
+        # ----------------------------------------------------
+
         try:
+
             number_of_words = int(
                 request.form.get(
                     "number_of_words",
                     5
                 )
             )
-        except (ValueError, TypeError):
+
+        except (
+            ValueError,
+            TypeError
+        ):
+
             number_of_words = 5
 
+        # ----------------------------------------------------
+        # Temperature
+        # ----------------------------------------------------
+
         try:
+
             temperature = float(
                 request.form.get(
                     "temperature",
                     0.8
                 )
             )
-        except (ValueError, TypeError):
+
+        except (
+            ValueError,
+            TypeError
+        ):
+
             temperature = 0.8
 
-        # Keep the request within a reasonable range
+        # ----------------------------------------------------
+        # Safety limits
+        # ----------------------------------------------------
+
         number_of_words = max(
             1,
-            min(number_of_words, 20)
+            min(
+                number_of_words,
+                20
+            )
         )
 
+        temperature = max(
+            0.1,
+            min(
+                temperature,
+                2.0
+            )
+        )
+
+        # ----------------------------------------------------
+        # Generate text
+        # ----------------------------------------------------
+
         if input_text:
+
+            print(
+                "========================================",
+                flush=True
+            )
 
             print(
                 f"Received request: "
@@ -247,12 +396,21 @@ def home():
                 flush=True
             )
 
+            print(
+                "========================================",
+                flush=True
+            )
+
             generated_text = generate_text(
                 input_text,
                 number_of_words,
                 temperature=temperature,
                 top_k=10
             )
+
+    # --------------------------------------------------------
+    # Render page
+    # --------------------------------------------------------
 
     return render_template(
         "index.html",
@@ -269,8 +427,15 @@ def home():
 
 if __name__ == "__main__":
 
+    port = int(
+        os.environ.get(
+            "PORT",
+            5000
+        )
+    )
+
     app.run(
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", 5000)),
+        port=port,
         debug=False
     )
