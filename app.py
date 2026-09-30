@@ -4,16 +4,28 @@ import os
 # RENDER / TENSORFLOW SETTINGS
 # ============================================================
 
-# Force TensorFlow to use CPU on Render
+# Render does not provide a GPU on the free instance
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-# Reduce unnecessary TensorFlow logs
+# Reduce TensorFlow logging
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+# Limit TensorFlow CPU threads.
+# This is important on a small Render instance.
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 
 
 from flask import Flask, render_template, request
+
 import numpy as np
 import pickle
+
+import tensorflow as tf
+
+# Explicitly limit TensorFlow threads
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
 
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -28,12 +40,18 @@ app = Flask(__name__)
 
 SEQUENCE_LENGTH = 20
 
+# IMPORTANT:
+# Your trained model was saved with batch size = 64.
+MODEL_BATCH_SIZE = 64
+
 
 # ============================================================
 # LOAD MODEL
 # ============================================================
 
+print("========================================", flush=True)
 print("Loading trained model...", flush=True)
+print("========================================", flush=True)
 
 model = load_model(
     "models/next_word_model.keras",
@@ -59,10 +77,19 @@ print(
 
 print("Loading tokenizer...", flush=True)
 
-with open("models/tokenizer.pkl", "rb") as file:
+with open(
+    "models/tokenizer.pkl",
+    "rb"
+) as file:
+
     tokenizer = pickle.load(file)
 
 print("Tokenizer loaded successfully.", flush=True)
+
+print(
+    f"Vocabulary size: {len(tokenizer.word_index)}",
+    flush=True
+)
 
 
 # ============================================================
@@ -73,12 +100,6 @@ index_to_word = {
     index: word
     for word, index in tokenizer.word_index.items()
 }
-
-
-print(
-    f"Tokenizer vocabulary size: {len(tokenizer.word_index)}",
-    flush=True
-)
 
 
 # ============================================================
@@ -92,8 +113,9 @@ def sample_next_word(
 ):
 
     probabilities = np.asarray(
-        probabilities
-    ).astype("float64")
+        probabilities,
+        dtype="float64"
+    )
 
     # Remove invalid values
     probabilities = np.nan_to_num(
@@ -109,7 +131,7 @@ def sample_next_word(
         len(probabilities)
     )
 
-    # Get top-k word indices
+    # Get top-k indices
     top_indices = np.argsort(
         probabilities
     )[-top_k:]
@@ -127,7 +149,7 @@ def sample_next_word(
         top_probabilities
     )
 
-    # Normalize probabilities
+    # Normalize
     probability_sum = np.sum(
         top_probabilities
     )
@@ -146,7 +168,7 @@ def sample_next_word(
             / probability_sum
         )
 
-    # Select a word
+    # Select next word
     selected_index = np.random.choice(
         top_indices,
         p=top_probabilities
@@ -175,7 +197,7 @@ def generate_text(
 
     generated_text = seed_text
 
-    # Convert seed text into tokens
+    # Convert seed text to tokens
     token_list = tokenizer.texts_to_sequences(
         [seed_text]
     )[0]
@@ -185,7 +207,7 @@ def generate_text(
         flush=True
     )
 
-    # If no known words were found
+    # If no known words
     if not token_list:
 
         print(
@@ -195,6 +217,11 @@ def generate_text(
 
         return seed_text
 
+
+    # ========================================================
+    # GENERATE WORDS
+    # ========================================================
+
     for i in range(number_of_words):
 
         print(
@@ -203,23 +230,54 @@ def generate_text(
             flush=True
         )
 
-        # Keep only the last 20 tokens
+        # Keep last 20 tokens
         current_tokens = token_list[
             -SEQUENCE_LENGTH:
         ]
 
-        # Convert to shape (1, 20)
-        padded_tokens = pad_sequences(
+        # Create one sequence of shape (1, 20)
+        single_input = pad_sequences(
             [current_tokens],
             maxlen=SEQUENCE_LENGTH,
             padding="pre"
         )
 
         print(
-            f"Input shape: "
-            f"{padded_tokens.shape}",
+            f"Single input shape: "
+            f"{single_input.shape}",
             flush=True
         )
+
+
+        # ====================================================
+        # IMPORTANT FIX
+        # ====================================================
+        #
+        # Your trained model expects:
+        #
+        #     (64, 20)
+        #
+        # But the web request contains:
+        #
+        #     (1, 20)
+        #
+        # Therefore repeat the same input 64 times.
+        #
+        # We only use the prediction from the first row.
+        #
+
+        model_input = np.repeat(
+            single_input,
+            MODEL_BATCH_SIZE,
+            axis=0
+        )
+
+        print(
+            f"Model input shape: "
+            f"{model_input.shape}",
+            flush=True
+        )
+
 
         # ====================================================
         # MODEL PREDICTION
@@ -227,24 +285,42 @@ def generate_text(
 
         try:
 
-            probabilities = model.predict(
-                padded_tokens,
+            print(
+                "Starting TensorFlow prediction...",
+                flush=True
+            )
+
+            predictions = model.predict(
+                model_input,
                 verbose=0
-            )[0]
+            )
+
+            print(
+                "TensorFlow prediction completed.",
+                flush=True
+            )
 
         except Exception as error:
 
             print(
-                f"Prediction error: {error}",
+                f"MODEL PREDICTION ERROR: "
+                f"{type(error).__name__}: {error}",
                 flush=True
             )
 
-            raise error
+            raise
+
+
+        # Use prediction from first identical input
+        probabilities = predictions[0]
+
 
         print(
-            "Prediction completed.",
+            f"Prediction output shape: "
+            f"{probabilities.shape}",
             flush=True
         )
+
 
         # ====================================================
         # SELECT NEXT WORD
@@ -256,10 +332,12 @@ def generate_text(
             top_k=top_k
         )
 
+
         next_word = index_to_word.get(
             predicted_word_index,
             ""
         )
+
 
         if not next_word:
 
@@ -271,18 +349,22 @@ def generate_text(
 
             break
 
-        # Add generated word
+
+        # Add word to generated text
         generated_text += " " + next_word
 
-        # Add token for next prediction
+
+        # Add predicted token
         token_list.append(
             predicted_word_index
         )
+
 
         print(
             f"Generated word: {next_word}",
             flush=True
         )
+
 
     print(
         f"Generation completed: "
@@ -306,9 +388,9 @@ def home():
     generated_text = ""
     input_text = ""
 
-    # Default values
     number_of_words = 5
     temperature = 0.8
+
 
     if request.method == "POST":
 
@@ -316,6 +398,7 @@ def home():
             "text",
             ""
         ).strip()
+
 
         # ----------------------------------------------------
         # Number of words
@@ -337,6 +420,7 @@ def home():
 
             number_of_words = 5
 
+
         # ----------------------------------------------------
         # Temperature
         # ----------------------------------------------------
@@ -357,8 +441,9 @@ def home():
 
             temperature = 0.8
 
+
         # ----------------------------------------------------
-        # Safety limits
+        # Limits
         # ----------------------------------------------------
 
         number_of_words = max(
@@ -377,8 +462,9 @@ def home():
             )
         )
 
+
         # ----------------------------------------------------
-        # Generate text
+        # Generate
         # ----------------------------------------------------
 
         if input_text:
@@ -401,6 +487,7 @@ def home():
                 flush=True
             )
 
+
             generated_text = generate_text(
                 input_text,
                 number_of_words,
@@ -408,9 +495,6 @@ def home():
                 top_k=10
             )
 
-    # --------------------------------------------------------
-    # Render page
-    # --------------------------------------------------------
 
     return render_template(
         "index.html",
