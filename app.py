@@ -1,3 +1,9 @@
+import os
+
+# Force TensorFlow to use CPU on Render
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 from flask import Flask, render_template, request
 import numpy as np
 import pickle
@@ -5,28 +11,62 @@ import pickle
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
+
 app = Flask(__name__)
 
-# Load trained model
-model = load_model("models/next_word_model.keras")
 
-# Load tokenizer
+# ============================================================
+# LOAD MODEL AND TOKENIZER
+# ============================================================
+
+print("Loading model...", flush=True)
+
+model = load_model(
+    "models/next_word_model.keras",
+    compile=False
+)
+
+print("Model loaded successfully.", flush=True)
+
+
+print("Loading tokenizer...", flush=True)
+
 with open("models/tokenizer.pkl", "rb") as file:
     tokenizer = pickle.load(file)
 
-# Convert word index to word
+print("Tokenizer loaded successfully.", flush=True)
+
+
+# ============================================================
+# WORD INDEX MAPPING
+# ============================================================
+
 index_to_word = {
     index: word
     for word, index in tokenizer.word_index.items()
-    if index < 20000
 }
+
+
+# ============================================================
+# MODEL SETTINGS
+# ============================================================
 
 SEQUENCE_LENGTH = 20
 
 
+# ============================================================
+# SAMPLE NEXT WORD
+# ============================================================
+
 def sample_next_word(probabilities, temperature=0.8, top_k=10):
 
     probabilities = np.asarray(probabilities).astype("float64")
+
+    # Prevent invalid values
+    probabilities = np.nan_to_num(probabilities)
+
+    # Make sure top_k is not larger than vocabulary size
+    top_k = min(top_k, len(probabilities))
 
     # Get top-k word indices
     top_indices = np.argsort(probabilities)[-top_k:]
@@ -41,10 +81,16 @@ def sample_next_word(probabilities, temperature=0.8, top_k=10):
     top_probabilities = np.exp(top_probabilities)
 
     # Normalize probabilities
-    top_probabilities = (
-        top_probabilities /
-        np.sum(top_probabilities)
-    )
+    probability_sum = np.sum(top_probabilities)
+
+    if probability_sum == 0:
+        top_probabilities = np.ones_like(top_probabilities) / len(
+            top_probabilities
+        )
+    else:
+        top_probabilities = (
+            top_probabilities / probability_sum
+        )
 
     # Randomly select a word
     selected_index = np.random.choice(
@@ -52,8 +98,12 @@ def sample_next_word(probabilities, temperature=0.8, top_k=10):
         p=top_probabilities
     )
 
-    return selected_index
+    return int(selected_index)
 
+
+# ============================================================
+# GENERATE TEXT
+# ============================================================
 
 def generate_text(
     seed_text,
@@ -62,52 +112,96 @@ def generate_text(
     top_k=10
 ):
 
+    print(
+        f"Starting generation: '{seed_text}' | "
+        f"words={number_of_words}",
+        flush=True
+    )
+
     generated_text = seed_text
 
-    for _ in range(number_of_words):
+    # Convert initial text to tokens only once
+    token_list = tokenizer.texts_to_sequences(
+        [seed_text]
+    )[0]
 
-        token_list = tokenizer.texts_to_sequences(
-            [generated_text]
-        )[0]
+    for i in range(number_of_words):
 
-        token_list = token_list[-SEQUENCE_LENGTH:]
+        print(
+            f"Predicting word {i + 1}/{number_of_words}",
+            flush=True
+        )
 
-        token_list = pad_sequences(
-            [token_list],
+        # Keep only the last SEQUENCE_LENGTH tokens
+        current_tokens = token_list[-SEQUENCE_LENGTH:]
+
+        # Pad sequence
+        padded_tokens = pad_sequences(
+            [current_tokens],
             maxlen=SEQUENCE_LENGTH,
             padding="pre"
         )
 
-        probabilities = model.predict(
-            token_list,
-            verbose=0
-        )[0]
+        # Direct model inference
+        # This is faster than model.predict() for a single sample
+        probabilities = model(
+            padded_tokens,
+            training=False
+        ).numpy()[0]
 
+        # Select next word
         predicted_word_index = sample_next_word(
             probabilities,
             temperature=temperature,
             top_k=top_k
         )
 
+        # Convert index to word
         next_word = index_to_word.get(
             predicted_word_index,
             ""
         )
 
         if not next_word:
+
+            print(
+                "No next word found.",
+                flush=True
+            )
+
             break
 
+        # Add generated word
         generated_text += " " + next_word
+
+        # Add predicted token for next iteration
+        token_list.append(predicted_word_index)
+
+        print(
+            f"Generated: {next_word}",
+            flush=True
+        )
+
+    print(
+        "Generation completed.",
+        flush=True
+    )
 
     return generated_text
 
+
+# ============================================================
+# HOME ROUTE
+# ============================================================
 
 @app.route("/", methods=["GET", "POST"])
 def home():
 
     generated_text = ""
     input_text = ""
-    number_of_words = 20
+
+    # Default values
+    number_of_words = 5
     temperature = 0.8
 
     if request.method == "POST":
@@ -117,21 +211,41 @@ def home():
             ""
         ).strip()
 
-        number_of_words = int(
-            request.form.get(
-                "number_of_words",
-                20
+        try:
+            number_of_words = int(
+                request.form.get(
+                    "number_of_words",
+                    5
+                )
             )
-        )
+        except (ValueError, TypeError):
+            number_of_words = 5
 
-        temperature = float(
-            request.form.get(
-                "temperature",
-                0.8
+        try:
+            temperature = float(
+                request.form.get(
+                    "temperature",
+                    0.8
+                )
             )
+        except (ValueError, TypeError):
+            temperature = 0.8
+
+        # Keep the request within a reasonable range
+        number_of_words = max(
+            1,
+            min(number_of_words, 20)
         )
 
         if input_text:
+
+            print(
+                f"Received request: "
+                f"text='{input_text}', "
+                f"words={number_of_words}, "
+                f"temperature={temperature}",
+                flush=True
+            )
 
             generated_text = generate_text(
                 input_text,
@@ -149,5 +263,14 @@ def home():
     )
 
 
+# ============================================================
+# LOCAL DEVELOPMENT
+# ============================================================
+
 if __name__ == "__main__":
-    app.run(debug=True)
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
+    )
