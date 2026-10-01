@@ -27,34 +27,33 @@ SEQUENCE_LENGTH = 20
 
 
 # ============================================================
-# LOAD MODEL
+# LOAD SMALL MODEL
 # ============================================================
 
 print("========================================", flush=True)
-print("Loading trained model...", flush=True)
+print("Loading small LSTM model...", flush=True)
 print("========================================", flush=True)
 
-# Fixed model accepts a single input of shape (1, 20).
 model = load_model(
-    "models/next_word_model_fixed.keras",
+    "models/next_word_model_small.keras",
     compile=False
 )
 
-print("Model loaded successfully.", flush=True)
+print("Small model loaded successfully.", flush=True)
 print(f"Model input shape: {model.input_shape}", flush=True)
 print(f"Model output shape: {model.output_shape}", flush=True)
 
 
 # ============================================================
-# LOAD TOKENIZER
+# LOAD SMALL TOKENIZER
 # ============================================================
 
-print("Loading tokenizer...", flush=True)
+print("Loading small tokenizer...", flush=True)
 
-with open("models/tokenizer.pkl", "rb") as file:
+with open("models/tokenizer_small.pkl", "rb") as file:
     tokenizer = pickle.load(file)
 
-print("Tokenizer loaded successfully.", flush=True)
+print("Small tokenizer loaded successfully.", flush=True)
 print(f"Vocabulary size: {len(tokenizer.word_index)}", flush=True)
 
 
@@ -73,7 +72,11 @@ index_to_word = {
 # ============================================================
 
 def sample_next_word(probabilities, temperature=0.8, top_k=10):
-    probabilities = np.asarray(probabilities, dtype="float64")
+
+    probabilities = np.asarray(
+        probabilities,
+        dtype="float64"
+    )
 
     probabilities = np.nan_to_num(
         probabilities,
@@ -82,11 +85,23 @@ def sample_next_word(probabilities, temperature=0.8, top_k=10):
         neginf=0.0
     )
 
-    top_k = max(1, min(int(top_k), len(probabilities)))
+    # Never select <OOV>
+    if len(probabilities) > 1:
+        probabilities[1] = 0.0
+
+    top_k = max(
+        1,
+        min(int(top_k), len(probabilities))
+    )
+
     top_indices = np.argsort(probabilities)[-top_k:]
+
     top_probabilities = probabilities[top_indices]
 
-    temperature = max(float(temperature), 0.01)
+    temperature = max(
+        float(temperature),
+        0.01
+    )
 
     top_probabilities = np.log(
         top_probabilities + 1e-10
@@ -96,7 +111,10 @@ def sample_next_word(probabilities, temperature=0.8, top_k=10):
 
     probability_sum = np.sum(top_probabilities)
 
-    if probability_sum <= 0 or not np.isfinite(probability_sum):
+    if (
+        probability_sum <= 0
+        or not np.isfinite(probability_sum)
+    ):
         top_probabilities = (
             np.ones_like(top_probabilities)
             / len(top_probabilities)
@@ -133,7 +151,9 @@ def generate_text(
 
     generated_text = seed_text
 
-    token_list = tokenizer.texts_to_sequences([seed_text])[0]
+    token_list = tokenizer.texts_to_sequences(
+        [seed_text]
+    )[0]
 
     print(
         f"Initial token list: {token_list}",
@@ -168,14 +188,13 @@ def generate_text(
         )
 
         try:
+
             print(
                 "Starting TensorFlow prediction...",
                 flush=True
             )
 
-            # IMPORTANT:
-            # Do NOT repeat the input 64 times.
-            # The fixed model accepts (1, 20) directly.
+            # New small model accepts (1, 20) directly.
             predictions = model.predict(
                 single_input,
                 verbose=0
@@ -187,11 +206,13 @@ def generate_text(
             )
 
         except Exception as error:
+
             print(
                 f"MODEL PREDICTION ERROR: "
                 f"{type(error).__name__}: {error}",
                 flush=True
             )
+
             raise
 
         probabilities = predictions[0]
@@ -213,16 +234,22 @@ def generate_text(
             ""
         )
 
-        if not next_word:
+        if (
+            not next_word
+            or next_word == "<OOV>"
+        ):
             print(
-                f"No word found for index "
+                f"Skipping invalid predicted index: "
                 f"{predicted_word_index}",
                 flush=True
             )
-            break
+            continue
 
         generated_text += " " + next_word
-        token_list.append(predicted_word_index)
+
+        token_list.append(
+            predicted_word_index
+        )
 
         print(
             f"Generated word: {next_word}",
@@ -257,23 +284,29 @@ def home():
         ).strip()
 
         try:
+
             number_of_words = int(
                 request.form.get(
                     "number_of_words",
                     5
                 )
             )
+
         except (ValueError, TypeError):
+
             number_of_words = 5
 
         try:
+
             temperature = float(
                 request.form.get(
                     "temperature",
                     0.8
                 )
             )
+
         except (ValueError, TypeError):
+
             temperature = 0.8
 
         number_of_words = max(

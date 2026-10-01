@@ -1,6 +1,3 @@
-Flask
+streamlit
 tensorflow==2.21.0
 numpy
-scikit-learn
-datasets
-gunicorn
