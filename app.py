@@ -1,7 +1,8 @@
+
 import os
 
 # ============================================================
-# RENDER / TENSORFLOW SETTINGS
+# TENSORFLOW SETTINGS
 # ============================================================
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -9,10 +10,10 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 
-from flask import Flask, render_template, request
 import numpy as np
 import pickle
 import tensorflow as tf
+import gradio as gr
 
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
@@ -20,8 +21,6 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-
-app = Flask(__name__)
 
 SEQUENCE_LENGTH = 20
 
@@ -98,10 +97,7 @@ def sample_next_word(probabilities, temperature=0.8, top_k=10):
 
     top_probabilities = probabilities[top_indices]
 
-    temperature = max(
-        float(temperature),
-        0.01
-    )
+    temperature = max(float(temperature), 0.01)
 
     top_probabilities = np.log(
         top_probabilities + 1e-10
@@ -144,8 +140,8 @@ def generate_text(
 ):
 
     print(
-        f"Starting generation: "
-        f"'{seed_text}' | words={number_of_words}",
+        f"Starting generation: '{seed_text}' | "
+        f"words={number_of_words}",
         flush=True
     )
 
@@ -155,16 +151,9 @@ def generate_text(
         [seed_text]
     )[0]
 
-    print(
-        f"Initial token list: {token_list}",
-        flush=True
-    )
+    print(f"Initial token list: {token_list}", flush=True)
 
     if not token_list:
-        print(
-            "No known words found in tokenizer.",
-            flush=True
-        )
         return seed_text
 
     for i in range(number_of_words):
@@ -182,19 +171,12 @@ def generate_text(
             padding="pre"
         )
 
-        print(
-            f"Model input shape: {single_input.shape}",
-            flush=True
-        )
-
         try:
-
             print(
                 "Starting TensorFlow prediction...",
                 flush=True
             )
 
-            # New small model accepts (1, 20) directly.
             predictions = model.predict(
                 single_input,
                 verbose=0
@@ -217,12 +199,6 @@ def generate_text(
 
         probabilities = predictions[0]
 
-        print(
-            f"Prediction output shape: "
-            f"{probabilities.shape}",
-            flush=True
-        )
-
         predicted_word_index = sample_next_word(
             probabilities,
             temperature=temperature,
@@ -234,10 +210,7 @@ def generate_text(
             ""
         )
 
-        if (
-            not next_word
-            or next_word == "<OOV>"
-        ):
+        if not next_word or next_word == "<OOV>":
             print(
                 f"Skipping invalid predicted index: "
                 f"{predicted_word_index}",
@@ -247,14 +220,9 @@ def generate_text(
 
         generated_text += " " + next_word
 
-        token_list.append(
-            predicted_word_index
-        )
+        token_list.append(predicted_word_index)
 
-        print(
-            f"Generated word: {next_word}",
-            flush=True
-        )
+        print(f"Generated word: {next_word}", flush=True)
 
     print(
         f"Generation completed: {generated_text}",
@@ -265,111 +233,129 @@ def generate_text(
 
 
 # ============================================================
-# HOME ROUTE
+# GRADIO INTERFACE FUNCTION
 # ============================================================
 
-@app.route("/", methods=["GET", "POST"])
-def home():
+def generate_from_ui(input_text, number_of_words, temperature):
 
-    generated_text = ""
-    input_text = ""
-    number_of_words = 5
-    temperature = 0.8
+    input_text = (input_text or "").strip()
 
-    if request.method == "POST":
+    if not input_text:
+        return "Please enter some text to continue."
 
-        input_text = request.form.get(
-            "text",
-            ""
-        ).strip()
+    number_of_words = max(
+        1,
+        min(int(number_of_words), 20)
+    )
 
-        try:
+    temperature = max(
+        0.1,
+        min(float(temperature), 2.0)
+    )
 
-            number_of_words = int(
-                request.form.get(
-                    "number_of_words",
-                    5
-                )
-            )
-
-        except (ValueError, TypeError):
-
-            number_of_words = 5
-
-        try:
-
-            temperature = float(
-                request.form.get(
-                    "temperature",
-                    0.8
-                )
-            )
-
-        except (ValueError, TypeError):
-
-            temperature = 0.8
-
-        number_of_words = max(
-            1,
-            min(number_of_words, 20)
+    try:
+        generated_text = generate_text(
+            input_text,
+            number_of_words,
+            temperature=temperature,
+            top_k=10
         )
 
-        temperature = max(
-            0.1,
-            min(temperature, 2.0)
-        )
+        return generated_text
 
-        if input_text:
+    except Exception as error:
 
-            print(
-                "========================================",
-                flush=True
+        print(f"Generation error: {error}", flush=True)
+
+        return f"Error generating text: {error}"
+
+
+# ============================================================
+# GRADIO APPLICATION
+# ============================================================
+
+with gr.Blocks(
+    title="Next Word AI",
+    theme=gr.themes.Soft()
+) as demo:
+
+    gr.Markdown(
+        """
+        # Next Word AI
+
+        ### LSTM-Based Next Word Prediction
+
+        Enter a sentence or phrase and let the LSTM model
+        generate a continuation based on the previous words.
+        """
+    )
+
+    with gr.Row():
+
+        with gr.Column():
+
+            input_text = gr.Textbox(
+                label="Enter Your Text",
+                placeholder="Example: To be or",
+                lines=3
             )
 
-            print(
-                f"Received request: "
-                f"text='{input_text}', "
-                f"words={number_of_words}, "
-                f"temperature={temperature}",
-                flush=True
+            number_of_words = gr.Slider(
+                minimum=1,
+                maximum=20,
+                value=5,
+                step=1,
+                label="Number of Words to Generate"
             )
 
-            print(
-                "========================================",
-                flush=True
+            temperature = gr.Slider(
+                minimum=0.1,
+                maximum=2.0,
+                value=0.8,
+                step=0.1,
+                label="Creativity / Temperature"
             )
 
-            generated_text = generate_text(
-                input_text,
-                number_of_words,
-                temperature=temperature,
-                top_k=10
+            generate_button = gr.Button(
+                "Generate Text",
+                variant="primary"
             )
 
-    return render_template(
-        "index.html",
-        generated_text=generated_text,
-        input_text=input_text,
-        number_of_words=number_of_words,
-        temperature=temperature
+        with gr.Column():
+
+            output_text = gr.Textbox(
+                label="Generated Text",
+                lines=8,
+                interactive=False
+            )
+
+    gr.Examples(
+        examples=[
+            ["To be or"],
+            ["The world is"],
+            ["She was very"],
+            ["Once upon a time"]
+        ],
+        inputs=input_text
+    )
+
+    generate_button.click(
+        fn=generate_from_ui,
+        inputs=[
+            input_text,
+            number_of_words,
+            temperature
+        ],
+        outputs=output_text
     )
 
 
 # ============================================================
-# LOCAL DEVELOPMENT
+# LAUNCH APPLICATION
 # ============================================================
 
 if __name__ == "__main__":
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            5000
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860
     )

@@ -1,3 +1,9 @@
+---
+title: Next Word AI
+sdk: gradio
+app_file: app.py
+---
+
 # Next Word Prediction Using LSTM
 
 ## Project Overview
